@@ -121,6 +121,18 @@ def can_update(plugin_id):
 
     return datetime.now() - last_fetched_dt >= throttle_delta
 
+def is_stale(plugin_id, hours=24):
+    """Check if plugin data is stale (older than specified hours)"""
+    last_fetched = get_last_fetched(plugin_id)
+
+    if last_fetched is None:
+        return True
+
+    last_fetched_dt = datetime.fromisoformat(last_fetched)
+    stale_threshold = timedelta(hours=hours)
+
+    return datetime.now() - last_fetched_dt >= stale_threshold
+
 def get_download_history(plugin_id, days=30):
     """Get download history for a plugin for the last N days"""
     with get_db() as conn:

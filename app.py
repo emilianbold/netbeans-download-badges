@@ -1,6 +1,8 @@
 """Flask application for download counter service"""
 from flask import Flask, jsonify, request, Response
 from datetime import datetime
+from concurrent.futures import ThreadPoolExecutor
+import atexit
 import logging
 import database
 import scraper
@@ -20,6 +22,31 @@ logger = logging.getLogger(__name__)
 # Initialize database on startup
 database.init_database()
 
+# Set up thread pool for background updates
+executor = ThreadPoolExecutor(max_workers=4)
+atexit.register(lambda: executor.shutdown(wait=False))
+
+def update_plugin_background(plugin_id):
+    """
+    Background task to update plugin download count
+    Includes error handling and logging
+    """
+    try:
+        if not database.can_update(plugin_id):
+            logger.debug(f"Skipping update for plugin {plugin_id} - throttled")
+            return
+
+        logger.info(f"Background update started for plugin {plugin_id}")
+        count = scraper.fetch_download_count(plugin_id)
+        timestamp = datetime.now().isoformat()
+        database.add_download_record(plugin_id, count, timestamp)
+        logger.info(f"Background update completed for plugin {plugin_id}: {count} downloads")
+
+    except scraper.ScraperError as e:
+        logger.error(f"Background scraper error for plugin {plugin_id}: {e}")
+    except Exception as e:
+        logger.error(f"Background update error for plugin {plugin_id}: {e}", exc_info=True)
+
 @app.route('/')
 def index():
     """Home page with API documentation"""
@@ -37,10 +64,11 @@ def index():
         <h2>Usage Examples:</h2>
         <h3>Badge (via shields.io):</h3>
         <pre>![Downloads](https://img.shields.io/endpoint?url=https://openbeans.org/plugin-counter/api/118)</pre>
-        <img src="https://img.shields.io/endpoint?url=https://img.shields.io/badge/downloads-121-blue" alt="Example badge">
+        <img src="https://img.shields.io/endpoint?url=https://openbeans.org/plugin-counter/api/118" alt="Example badge">
 
         <h3>Sparkline:</h3>
         <pre>![Download History](https://openbeans.org/plugin-counter/sparkline/118)</pre>
+        <img src="https://openbeans.org/plugin-counter/sparkline/118" alt="Example sparkline">
     </body>
     </html>
     '''
@@ -50,18 +78,27 @@ def api_endpoint(plugin_id):
     """
     Return download count in shields.io endpoint badge format
     See: https://shields.io/endpoint
+
+    Automatically queues background update if data is stale (>24 hours old)
     """
     try:
         count = database.get_latest_download_count(plugin_id)
 
         if count is None:
-            # No data available yet
+            # No data available yet - queue immediate update
+            logger.info(f"No data for plugin {plugin_id}, queuing background update")
+            executor.submit(update_plugin_background, plugin_id)
             return jsonify({
                 'schemaVersion': 1,
                 'label': config.DEFAULT_BADGE_LABEL,
                 'message': 'no data',
                 'color': 'lightgrey'
             })
+
+        # Check if data is stale and queue background update if needed
+        if database.is_stale(plugin_id, hours=24):
+            logger.info(f"Data stale for plugin {plugin_id}, queuing background update")
+            executor.submit(update_plugin_background, plugin_id)
 
         # Format the number nicely
         formatted_count = svg_generator.format_number(count)
@@ -84,7 +121,11 @@ def api_endpoint(plugin_id):
 
 @app.route('/sparkline/<plugin_id>')
 def sparkline_endpoint(plugin_id):
-    """Return sparkline SVG for download history"""
+    """
+    Return sparkline SVG for download history
+
+    Automatically queues background update if data is stale (>24 hours old)
+    """
     try:
         # Get days parameter from query string
         days = request.args.get('days', config.DEFAULT_SPARKLINE_DAYS, type=int)
@@ -96,8 +137,16 @@ def sparkline_endpoint(plugin_id):
         history = database.get_download_history(plugin_id, days)
 
         if not history:
+            # No data available yet - queue immediate update
+            logger.info(f"No data for plugin {plugin_id}, queuing background update")
+            executor.submit(update_plugin_background, plugin_id)
             svg = svg_generator.generate_empty_sparkline()
         else:
+            # Check if data is stale and queue background update if needed
+            if database.is_stale(plugin_id, hours=24):
+                logger.info(f"Data stale for plugin {plugin_id}, queuing background update")
+                executor.submit(update_plugin_background, plugin_id)
+
             # Pass full history with timestamps to handle gaps correctly
             svg = svg_generator.generate_sparkline(history)
 

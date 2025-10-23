@@ -1,0 +1,8 @@
+# Crontab entry to update plugin 118 download count daily at 3 AM
+# Add this to your crontab with: crontab -e
+# Then paste the line below:
+
+0 3 * * * curl -X POST http://127.0.0.1:5000/update/118 -H "Content-Type: application/json" -d '{}' >> counter-cron.log 2>&1
+
+# Note: The cron job uses localhost:5000
+# External users would access: https://openbeans.org/plugin-counter/update/118

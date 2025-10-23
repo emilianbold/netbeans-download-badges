@@ -1,12 +1,13 @@
 """SVG generator utilities for sparklines and badges"""
 import config
+from datetime import datetime
 
-def generate_sparkline(data_points, width=None, height=None, color=None):
+def generate_sparkline(history, width=None, height=None, color=None):
     """
-    Generate an SVG sparkline from a list of data points
+    Generate an SVG sparkline from download history
 
     Args:
-        data_points: List of numeric values
+        history: List of dicts with 'timestamp' and 'count' keys
         width: SVG width (default from config)
         height: SVG height (default from config)
         color: Line color (default from config)
@@ -14,32 +15,53 @@ def generate_sparkline(data_points, width=None, height=None, color=None):
     Returns:
         SVG string
     """
-    if not data_points:
+    if not history:
         return generate_empty_sparkline(width, height)
 
     width = width or config.SPARKLINE_WIDTH
     height = height or config.SPARKLINE_HEIGHT
     color = color or config.SPARKLINE_COLOR
 
+    # Extract values and timestamps
+    data_points = [record['count'] for record in history]
+    timestamps = [datetime.fromisoformat(record['timestamp']) for record in history]
+
     # Normalize data to fit in the sparkline
     min_val = min(data_points)
     max_val = max(data_points)
+
+    # Calculate time range for proper X-axis positioning
+    min_time = timestamps[0]
+    max_time = timestamps[-1]
+    time_range = (max_time - min_time).total_seconds()
 
     # Avoid division by zero
     if max_val == min_val:
         # All values are the same, draw a horizontal line in the middle
         y = height / 2
-        points = [(i * width / (len(data_points) - 1 if len(data_points) > 1 else 1), y)
-                  for i in range(len(data_points))]
+        if time_range == 0:
+            # Single data point
+            points = [(width / 2, y)]
+        else:
+            points = []
+            for i, ts in enumerate(timestamps):
+                x = ((ts - min_time).total_seconds() / time_range) * width
+                points.append((x, y))
     else:
         # Scale points to fit within the height
         padding = height * 0.1  # 10% padding
         usable_height = height - 2 * padding
 
         points = []
-        for i, value in enumerate(data_points):
-            x = i * width / (len(data_points) - 1) if len(data_points) > 1 else width / 2
-            # Invert y because SVG coordinates start at top
+        for value, ts in zip(data_points, timestamps):
+            # Calculate X based on actual timestamp
+            if time_range == 0:
+                # Single data point
+                x = width / 2
+            else:
+                x = ((ts - min_time).total_seconds() / time_range) * width
+
+            # Calculate Y based on value
             normalized = (value - min_val) / (max_val - min_val)
             y = height - padding - (normalized * usable_height)
             points.append((x, y))

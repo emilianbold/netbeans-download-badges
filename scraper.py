@@ -1,4 +1,4 @@
-"""Scraper module for fetching download counts from various sources"""
+"""Scraper module for fetching download counts from NetBeans Plugin Portal"""
 import requests
 from bs4 import BeautifulSoup
 
@@ -6,10 +6,18 @@ class ScraperError(Exception):
     """Custom exception for scraper errors"""
     pass
 
-def fetch_netbeans_download_count(plugin_id):
+def fetch_download_count(plugin_id):
     """
-    Fetch download count for NetBeans plugin
-    Returns the download count as an integer
+    Fetch download count for NetBeans plugin from plugins.netbeans.apache.org
+
+    Args:
+        plugin_id: The NetBeans plugin ID
+
+    Returns:
+        Download count as integer
+
+    Raises:
+        ScraperError: If scraping fails
     """
     url = f"https://plugins.netbeans.apache.org/catalogue/?id={plugin_id}"
 
@@ -56,29 +64,3 @@ def fetch_netbeans_download_count(plugin_id):
         raise ScraperError(f"Error fetching URL: {e}")
     except Exception as e:
         raise ScraperError(f"Error parsing page: {e}")
-
-# Mapping of source types to scraper functions
-SCRAPERS = {
-    'netbeans': fetch_netbeans_download_count,
-}
-
-def fetch_download_count(source_type, plugin_id):
-    """
-    Fetch download count based on source type
-
-    Args:
-        source_type: Type of source (e.g., 'netbeans')
-        plugin_id: The plugin ID
-
-    Returns:
-        Download count as integer
-
-    Raises:
-        ScraperError: If scraping fails
-    """
-    scraper = SCRAPERS.get(source_type)
-
-    if not scraper:
-        raise ScraperError(f"Unknown source type: {source_type}")
-
-    return scraper(plugin_id)

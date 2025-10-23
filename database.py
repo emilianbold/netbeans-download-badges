@@ -27,9 +27,6 @@ def init_database():
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS plugins (
                 id TEXT PRIMARY KEY,
-                name TEXT,
-                source_type TEXT NOT NULL,
-                last_fetched TEXT,
                 created_at TEXT NOT NULL
             )
         ''')
@@ -61,27 +58,14 @@ def init_database():
             ON downloads(plugin_id, timestamp)
         ''')
 
-def add_or_update_plugin(plugin_id, source_type, name=None):
-    """Add a new plugin or update existing one"""
+def add_plugin_if_not_exists(plugin_id):
+    """Add a plugin if it doesn't exist"""
     with get_db() as conn:
         cursor = conn.cursor()
-
-        # Check if plugin exists
-        cursor.execute('SELECT id FROM plugins WHERE id = ?', (plugin_id,))
-        exists = cursor.fetchone()
-
-        if exists:
-            # Update source_type if provided
-            cursor.execute(
-                'UPDATE plugins SET source_type = ?, name = COALESCE(?, name) WHERE id = ?',
-                (source_type, name, plugin_id)
-            )
-        else:
-            # Insert new plugin
-            cursor.execute(
-                'INSERT INTO plugins (id, name, source_type, created_at) VALUES (?, ?, ?, ?)',
-                (plugin_id, name, source_type, datetime.now().isoformat())
-            )
+        cursor.execute(
+            'INSERT OR IGNORE INTO plugins (id, created_at) VALUES (?, ?)',
+            (plugin_id, datetime.now().isoformat())
+        )
 
 def add_download_record(plugin_id, count, timestamp=None):
     """Add a download count record for a plugin"""
@@ -90,15 +74,17 @@ def add_download_record(plugin_id, count, timestamp=None):
 
     with get_db() as conn:
         cursor = conn.cursor()
+
+        # Ensure plugin exists
+        cursor.execute(
+            'INSERT OR IGNORE INTO plugins (id, created_at) VALUES (?, ?)',
+            (plugin_id, datetime.now().isoformat())
+        )
+
+        # Insert download record
         cursor.execute(
             'INSERT INTO downloads (plugin_id, timestamp, count) VALUES (?, ?, ?)',
             (plugin_id, timestamp, count)
-        )
-
-        # Update last_fetched timestamp
-        cursor.execute(
-            'UPDATE plugins SET last_fetched = ? WHERE id = ?',
-            (timestamp, plugin_id)
         )
 
 def get_latest_download_count(plugin_id):
@@ -113,15 +99,15 @@ def get_latest_download_count(plugin_id):
         return result['count'] if result else None
 
 def get_last_fetched(plugin_id):
-    """Get the last fetched timestamp for a plugin"""
+    """Get the last fetched timestamp for a plugin by querying the downloads table"""
     with get_db() as conn:
         cursor = conn.cursor()
         cursor.execute(
-            'SELECT last_fetched FROM plugins WHERE id = ?',
+            'SELECT timestamp FROM downloads WHERE plugin_id = ? ORDER BY timestamp DESC LIMIT 1',
             (plugin_id,)
         )
         result = cursor.fetchone()
-        return result['last_fetched'] if result else None
+        return result['timestamp'] if result else None
 
 def can_update(plugin_id):
     """Check if a plugin can be updated based on throttle settings"""

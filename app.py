@@ -98,9 +98,8 @@ def sparkline_endpoint(plugin_id):
         if not history:
             svg = svg_generator.generate_empty_sparkline()
         else:
-            # Extract counts
-            counts = [record['count'] for record in history]
-            svg = svg_generator.generate_sparkline(counts)
+            # Pass full history with timestamps to handle gaps correctly
+            svg = svg_generator.generate_sparkline(history)
 
         return Response(svg, mimetype='image/svg+xml')
 
@@ -114,7 +113,6 @@ def sparkline_endpoint(plugin_id):
 def update_endpoint(plugin_id):
     """
     Update download count for a NetBeans plugin (throttled)
-    Expects JSON body with optional 'name'
     """
     try:
         # Check if update is allowed (throttling)
@@ -126,16 +124,9 @@ def update_endpoint(plugin_id):
                 'last_fetched': last_fetched
             }), 429
 
-        # Get request data
-        data = request.get_json() or {}
-        name = data.get('name')
-
-        # Add/update plugin in database (always use 'netbeans' as source)
-        database.add_or_update_plugin(plugin_id, 'netbeans', name)
-
         # Fetch download count from NetBeans plugin portal
         logger.info(f"Fetching download count for NetBeans plugin {plugin_id}")
-        count = scraper.fetch_download_count('netbeans', plugin_id)
+        count = scraper.fetch_download_count(plugin_id)
 
         # Store in database
         timestamp = datetime.now().isoformat()

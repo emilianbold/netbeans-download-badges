@@ -32,6 +32,11 @@ def update_plugin_background(plugin_id):
     Includes error handling and logging
     """
     try:
+        # Check if we should even try scraping (avoid repeatedly failing plugins)
+        if not database.should_retry_scrape(plugin_id):
+            logger.debug(f"Skipping update for plugin {plugin_id} - too many previous failures")
+            return
+
         if not database.can_update(plugin_id):
             logger.debug(f"Skipping update for plugin {plugin_id} - throttled")
             return
@@ -40,12 +45,18 @@ def update_plugin_background(plugin_id):
         count = scraper.fetch_download_count(plugin_id)
         timestamp = datetime.now().isoformat()
         database.add_download_record(plugin_id, count, timestamp)
+
+        # Log successful scrape
+        database.log_scrape_success(plugin_id)
+
         logger.info(f"Background update completed for plugin {plugin_id}: {count} downloads")
 
     except scraper.ScraperError as e:
         logger.error(f"Background scraper error for plugin {plugin_id}: {e}")
+        database.log_scrape_error(plugin_id, str(e))
     except Exception as e:
         logger.error(f"Background update error for plugin {plugin_id}: {e}", exc_info=True)
+        database.log_scrape_error(plugin_id, str(e))
 
 @app.route('/')
 def index():
@@ -181,6 +192,9 @@ def update_endpoint(plugin_id):
         timestamp = datetime.now().isoformat()
         database.add_download_record(plugin_id, count, timestamp)
 
+        # Log successful scrape
+        database.log_scrape_success(plugin_id)
+
         logger.info(f"Successfully updated plugin {plugin_id}: {count} downloads")
 
         return jsonify({
@@ -192,6 +206,7 @@ def update_endpoint(plugin_id):
 
     except scraper.ScraperError as e:
         logger.error(f"Scraper error for plugin {plugin_id}: {e}")
+        database.log_scrape_error(plugin_id, str(e))
         return jsonify({
             'error': 'Scraper error',
             'message': str(e)
@@ -199,6 +214,7 @@ def update_endpoint(plugin_id):
 
     except Exception as e:
         logger.error(f"Error in /update/{plugin_id}: {e}")
+        database.log_scrape_error(plugin_id, str(e))
         return jsonify({
             'error': 'Internal server error',
             'message': str(e)

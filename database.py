@@ -58,6 +58,22 @@ def init_database():
             ON downloads(plugin_id, timestamp)
         ''')
 
+        # Create scrape log table (append-only)
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS scrape_logs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                plugin_id TEXT NOT NULL,
+                timestamp TEXT NOT NULL,
+                success INTEGER NOT NULL,
+                error_message TEXT
+            )
+        ''')
+
+        cursor.execute('''
+            CREATE INDEX IF NOT EXISTS idx_scrape_logs_plugin_id
+            ON scrape_logs(plugin_id, timestamp DESC)
+        ''')
+
 def add_plugin_if_not_exists(plugin_id):
     """Add a plugin if it doesn't exist"""
     with get_db() as conn:
@@ -159,3 +175,83 @@ def get_plugin_info(plugin_id):
         )
         result = cursor.fetchone()
         return dict(result) if result else None
+
+def log_scrape_success(plugin_id):
+    """Log a successful scrape"""
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            'INSERT INTO scrape_logs (plugin_id, timestamp, success) VALUES (?, ?, 1)',
+            (plugin_id, datetime.now().isoformat())
+        )
+
+def log_scrape_error(plugin_id, error_message):
+    """Log a failed scrape"""
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            'INSERT INTO scrape_logs (plugin_id, timestamp, success, error_message) VALUES (?, ?, 0, ?)',
+            (plugin_id, datetime.now().isoformat(), error_message)
+        )
+
+def has_successful_scrape(plugin_id):
+    """Check if plugin has ever been successfully scraped"""
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            'SELECT 1 FROM scrape_logs WHERE plugin_id = ? AND success = 1 LIMIT 1',
+            (plugin_id,)
+        )
+        return cursor.fetchone() is not None
+
+def should_retry_scrape(plugin_id):
+    """
+    Check if we should retry scraping a plugin that previously failed
+
+    Returns False if:
+    - Plugin has failed 3+ consecutive times (no successful scrapes in between)
+    - Last scrape was less than 24 hours ago
+    """
+    with get_db() as conn:
+        cursor = conn.cursor()
+
+        # Get the last scrape result
+        cursor.execute(
+            'SELECT success, timestamp FROM scrape_logs WHERE plugin_id = ? ORDER BY timestamp DESC LIMIT 1',
+            (plugin_id,)
+        )
+        last_scrape = cursor.fetchone()
+
+        if not last_scrape:
+            return True  # No scrapes recorded, can try
+
+        # If last scrape was successful, allow retry
+        if last_scrape['success']:
+            return True
+
+        # Last scrape failed - check if we should wait
+        last_scrape_time = datetime.fromisoformat(last_scrape['timestamp'])
+        hours_since_scrape = (datetime.now() - last_scrape_time).total_seconds() / 3600
+
+        if hours_since_scrape < 24:
+            return False  # Wait 24 hours before retry
+
+        # Check consecutive failure count
+        cursor.execute(
+            '''SELECT success FROM scrape_logs
+               WHERE plugin_id = ?
+               ORDER BY timestamp DESC
+               LIMIT 10''',
+            (plugin_id,)
+        )
+        recent_scrapes = cursor.fetchall()
+
+        # Count consecutive failures from most recent
+        consecutive_failures = 0
+        for scrape in recent_scrapes:
+            if scrape['success']:
+                break
+            consecutive_failures += 1
+
+        # If 3+ consecutive failures, give up
+        return consecutive_failures < 3
